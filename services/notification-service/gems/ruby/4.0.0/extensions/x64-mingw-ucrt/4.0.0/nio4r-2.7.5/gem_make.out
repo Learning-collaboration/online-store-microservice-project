@@ -1,0 +1,22 @@
+current directory: C:/Users/user/Downloads/Microservice-project/services/notification-service/gems/ruby/4.0.0/gems/nio4r-2.7.5/ext/nio4r
+C:/Ruby40-x64/bin/ruby.exe extconf.rb
+
+current directory: C:/Users/user/Downloads/Microservice-project/services/notification-service/gems/ruby/4.0.0/gems/nio4r-2.7.5/ext/nio4r
+make -j3 DESTDIR\= sitearchdir\=./.gem.20261025-5360-qg47im sitelibdir\=./.gem.20261025-5360-qg47im clean
+make: warning: -j3 forced in submake: resetting jobserver mode.
+make: *** No rule to make target 'clean'.  Stop.
+
+current directory: C:/Users/user/Downloads/Microservice-project/services/notification-service/gems/ruby/4.0.0/gems/nio4r-2.7.5/ext/nio4r
+make -j3 DESTDIR\= sitearchdir\=./.gem.20261025-5360-qg47im sitelibdir\=./.gem.20261025-5360-qg47im
+make: warning: -j3 forced in submake: resetting jobserver mode.
+make: Nothing to be done for 'all'.
+
+current directory: C:/Users/user/Downloads/Microservice-project/services/notification-service/gems/ruby/4.0.0/gems/nio4r-2.7.5/ext/nio4r
+make -j3 DESTDIR\= sitearchdir\=./.gem.20261025-5360-qg47im sitelibdir\=./.gem.20261025-5360-qg47im install
+make: warning: -j3 forced in submake: resetting jobserver mode.
+make: Nothing to be done for 'install'.
+
+current directory: C:/Users/user/Downloads/Microservice-project/services/notification-service/gems/ruby/4.0.0/gems/nio4r-2.7.5/ext/nio4r
+make DESTDIR\= sitearchdir\=./.gem.20261025-5360-qg47im sitelibdir\=./.gem.20261025-5360-qg47im clean
+make: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+make: *** No rule to make target 'clean'.  Stop.
