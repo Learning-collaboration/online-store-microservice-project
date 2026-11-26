@@ -1,0 +1,164 @@
+name: DevSecOps CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  id-token: write      # Required for AWS OIDC and Cosign keyless signing
+  contents: read       # Required for actions/checkout
+  packages: write      # Required if pushing to GHCR (optional if using ECR)
+  security-events: write # Required to upload SARIF results to GitHub Security tab
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: my-app-service
+  S3_SBOM_BUCKET: my-org-security-sboms
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  # ============================================================================
+  # JOB 1: Test, Coverage, SAST (SonarQube), and SCA (Trivy Filesystem)
+  # ============================================================================
+  code-quality-and-security:
+    name: Test, SAST & SCA
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Full git history required for accurate SonarQube blame/analysis
+
+      # --- Replace this runtime block with your stack (Node, Go, Python, etc.) ---
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests and generate code coverage
+        run: npm test -- --coverage --coverageReporters=lcov
+      # ---------------------------------------------------------------------------
+
+      - name: SAST Scan with SonarQube
+        uses: SonarSource/sonarqube-scan-action@v4
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        with:
+          args: >
+            -Dsonar.projectKey=${{ github.event.repository.name }}
+            -Dsonar.sources=src
+            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+
+      - name: SonarQube Quality Gate Check
+        uses: SonarSource/sonarqube-quality-gate-action@v1
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      - name: SCA Scan (Dependencies & Misconfigurations) with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          scanners: "vuln,misconfig,secret"
+          severity: "CRITICAL,HIGH"
+          exit-code: "1" # Fails the pipeline if CRITICAL or HIGH vulnerabilities exist
+          format: "table"
+
+  # ============================================================================
+  # JOB 2: BuildKit Build/Push, Image Scan, Cosign Signing, SBOM & S3 Upload
+  # ============================================================================
+  build-sign-attest:
+    name: Build, Scan, Sign & Attest
+    needs: code-quality-and-security
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker BuildKit (Buildx)
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        id: build-push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/arm64 # Change to linux/amd64 or linux/amd64,linux/arm64 if needed
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Define immutable image reference by digest
+        id: image-ref
+        run: |
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}"
+          IMAGE_DIGEST="${IMAGE_URI}@${{ steps.build-push.outputs.digest }}"
+          echo "uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+          echo "digest=${IMAGE_DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Scan built container image with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: "${{ steps.image-ref.outputs.digest }}"
+          format: "table"
+          exit-code: "1" # Blocks signing & deployment if image contains CRITICAL/HIGH CVEs
+          ignore-unfixed: true
+          vuln-type: "os,library"
+          severity: "CRITICAL,HIGH"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Sign container image digest with Cosign (Keyless OIDC)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign sign --yes "${{ steps.image-ref.outputs.digest }}"
+
+      - name: Generate SBOM (SPDX JSON) using Syft
+        uses: anchore/sbom-action@v0
+        with:
+          image: "${{ steps.image-ref.outputs.digest }}"
+          format: "spdx-json"
+          output-file: "sbom-${{ env.IMAGE_TAG }}.spdx.json"
+          upload-artifact: false
+
+      - name: Attest SBOM to container image with Cosign
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign attest --yes \
+            --predicate "sbom-${{ env.IMAGE_TAG }}.spdx.json" \
+            --type spdxjson \
+            "${{ steps.image-ref.outputs.digest }}"
+
+      - name: Push SBOM archive to Amazon S3
+        run: |
+          aws s3 cp "sbom-${{ env.IMAGE_TAG }}.spdx.json" \
+            "s3://${{ env.S3_SBOM_BUCKET }}/${{ env.ECR_REPOSITORY }}/${{ env.IMAGE_TAG }}/sbom.spdx.json" \
+            --sse AES256
