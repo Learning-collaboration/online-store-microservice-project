@@ -1,4 +1,4 @@
-## Incident: 500 Internal Server Error on User Registration via Nginx Reverse Proxy
+## Incident: 502 Internal Server Error on User Registration via Nginx Reverse Proxy
 
    1. Symptom:
       After deploying the polyglot stack with Docker Compose, POST requests to the registration endpoint (/api/auth/auth/register) consistently failed at the gateway with an HTTP 500 Internal Server Error before ever reaching auth-service.
